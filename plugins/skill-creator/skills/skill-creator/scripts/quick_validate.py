@@ -38,8 +38,24 @@ def validate_skill(skill_path):
     except yaml.YAMLError as e:
         return False, f"Invalid YAML in frontmatter: {e}"
 
-    # Define allowed properties
-    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility'}
+    # Define allowed properties across standard and Claude Code skill frontmatter
+    ALLOWED_PROPERTIES = {
+        'name',
+        'description',
+        'when_to_use',
+        'license',
+        'allowed-tools',
+        'disallowed-tools',
+        'tools',
+        'metadata',
+        'compatibility',
+        'version',
+        'user-invocable',
+        'argument-hint',
+        'disable-model-invocation',
+        'model',
+        'effort',
+    }
 
     # Check for unexpected properties (excluding nested keys under metadata)
     unexpected_keys = set(frontmatter.keys()) - ALLOWED_PROPERTIES
@@ -52,7 +68,7 @@ def validate_skill(skill_path):
     # Check required fields
     if 'name' not in frontmatter:
         return False, "Missing 'name' in frontmatter"
-    if 'description' not in frontmatter:
+    if 'description' not in frontmatter and 'when_to_use' not in frontmatter:
         return False, "Missing 'description' in frontmatter"
 
     # Extract name for validation
@@ -71,14 +87,11 @@ def validate_skill(skill_path):
             return False, f"Name is too long ({len(name)} characters). Maximum is 64 characters."
 
     # Extract and validate description
-    description = frontmatter.get('description', '')
+    description = frontmatter.get('description', frontmatter.get('when_to_use', ''))
     if not isinstance(description, str):
         return False, f"Description must be a string, got {type(description).__name__}"
     description = description.strip()
     if description:
-        # Check for angle brackets
-        if '<' in description or '>' in description:
-            return False, "Description cannot contain angle brackets (< or >)"
         # Check description length (max 1024 characters per spec)
         if len(description) > 1024:
             return False, f"Description is too long ({len(description)} characters). Maximum is 1024 characters."

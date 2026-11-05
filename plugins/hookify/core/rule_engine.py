@@ -29,8 +29,8 @@ class RuleEngine:
 
     def __init__(self):
         """Initialize rule engine."""
-        # No need for instance cache anymore - using global lru_cache
-        pass
+        # Cache transcript contents by path during rule evaluation
+        self._transcript_cache: Dict[str, str] = {}
 
     def evaluate_rules(self, rules: List[Rule], input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Evaluate all rules and return combined results.
@@ -63,13 +63,13 @@ class RuleEngine:
             combined_message = "\n\n".join(messages)
 
             # Use appropriate blocking format based on event type
-            if hook_event == 'Stop':
+            if hook_event in ['Stop', 'SubagentStop', 'PostToolUse']:
                 return {
                     "decision": "block",
                     "reason": combined_message,
                     "systemMessage": combined_message
                 }
-            elif hook_event in ['PreToolUse', 'PostToolUse']:
+            elif hook_event == 'PreToolUse':
                 return {
                     "hookSpecificOutput": {
                         "hookEventName": hook_event,
@@ -205,23 +205,31 @@ class RuleEngine:
             if field == 'reason':
                 return input_data.get('reason', '')
             elif field == 'transcript':
-                # Read transcript file if path provided
+                # Read transcript file if path provided (with per-engine cache)
                 transcript_path = input_data.get('transcript_path')
                 if transcript_path:
+                    if transcript_path in self._transcript_cache:
+                        return self._transcript_cache[transcript_path]
                     try:
-                        with open(transcript_path, 'r') as f:
-                            return f.read()
+                        with open(transcript_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        self._transcript_cache[transcript_path] = content
+                        return content
                     except FileNotFoundError:
                         print(f"Warning: Transcript file not found: {transcript_path}", file=sys.stderr)
+                        self._transcript_cache[transcript_path] = ''
                         return ''
                     except PermissionError:
                         print(f"Warning: Permission denied reading transcript: {transcript_path}", file=sys.stderr)
+                        self._transcript_cache[transcript_path] = ''
                         return ''
                     except (IOError, OSError) as e:
                         print(f"Warning: Error reading transcript {transcript_path}: {e}", file=sys.stderr)
+                        self._transcript_cache[transcript_path] = ''
                         return ''
                     except UnicodeDecodeError as e:
                         print(f"Warning: Encoding error in transcript {transcript_path}: {e}", file=sys.stderr)
+                        self._transcript_cache[transcript_path] = ''
                         return ''
             elif field == 'user_prompt':
                 # For UserPromptSubmit events

@@ -1,0 +1,51 @@
+name: Run Plugin Unit Tests
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/code-modernization/**'
+      - 'plugins/security-guidance/**'
+      - 'plugins/hookify/**'
+      - 'plugins/plugin-dev/**'
+      - 'plugins/skill-creator/**'
+      - '.github/workflows/run-plugin-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/code-modernization/**'
+      - 'plugins/security-guidance/**'
+      - 'plugins/hookify/**'
+      - 'plugins/plugin-dev/**'
+      - 'plugins/skill-creator/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run hookify unit tests
+        run: python3 -B -m unittest discover -s plugins/hookify/tests -v
+
+      - name: Run code-modernization Python unit tests
+        run: >
+          python3 -B -m unittest discover
+          -s plugins/code-modernization/scripts/tests -v
+
+      - name: Validate all plugin hooks.json schemas
+        run: |
+          set -euo pipefail
+          validator="plugins/plugin-dev/skills/hook-development"
+          validator="${validator}/scripts/validate-hook-schema.sh"
+          for f in $(find plugins external_plugins -name "hooks.json"); do
+            bash "$validator" "$f"
+          done

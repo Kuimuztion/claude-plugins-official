@@ -38,9 +38,13 @@ echo "✅ Valid JSON"
 # Check 2: Root structure
 echo ""
 echo "Checking root structure..."
-VALID_EVENTS=("PreToolUse" "PostToolUse" "UserPromptSubmit" "Stop" "SubagentStop" "SessionStart" "SessionEnd" "PreCompact" "Notification")
+VALID_EVENTS=("PreToolUse" "PostToolUse" "PostToolUseFailure" "PermissionRequest" "UserPromptSubmit" "UserPromptExpansion" "Stop" "StopFailure" "SubagentStart" "SubagentStop" "SessionStart" "SessionEnd" "PreCompact" "Notification")
+HOOKS_SELECTOR='if (type == "object" and has("hooks") and (.hooks | type == "object")) then .hooks else . end'
 
-for event in $(jq -r 'keys[]' "$HOOKS_FILE"); do
+for event in $(jq -r "($HOOKS_SELECTOR) | keys[]" "$HOOKS_FILE"); do
+  if [ "$event" = "description" ] || [ "$event" = "modules" ]; then
+    continue
+  fi
   found=false
   for valid_event in "${VALID_EVENTS[@]}"; do
     if [ "$event" = "$valid_event" ]; then
@@ -62,83 +66,86 @@ echo "Validating individual hooks..."
 error_count=0
 warning_count=0
 
-for event in $(jq -r 'keys[]' "$HOOKS_FILE"); do
-  hook_count=$(jq -r ".\"$event\" | length" "$HOOKS_FILE")
+for event in $(jq -r "($HOOKS_SELECTOR) | keys[]" "$HOOKS_FILE"); do
+  if [ "$event" = "description" ] || [ "$event" = "modules" ]; then
+    continue
+  fi
+  hook_count=$(jq -r "($HOOKS_SELECTOR) | .\"$event\" | length" "$HOOKS_FILE")
 
   for ((i=0; i<hook_count; i++)); do
-    # Check matcher exists
-    matcher=$(jq -r ".\"$event\"[$i].matcher // empty" "$HOOKS_FILE")
-    if [ -z "$matcher" ]; then
-      echo "❌ $event[$i]: Missing 'matcher' field"
-      ((error_count++))
+    # Check matcher if present (optional for lifecycle/catch-all hooks)
+    matcher_type=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i] | if has(\"matcher\") then (.matcher | type) else \"omitted\" end" "$HOOKS_FILE")
+    if [ "$matcher_type" != "omitted" ] && [ "$matcher_type" != "string" ]; then
+      echo "❌ $event[$i]: 'matcher' must be a string when specified"
+      error_count=$((error_count + 1))
       continue
     fi
 
     # Check hooks array exists
-    hooks=$(jq -r ".\"$event\"[$i].hooks // empty" "$HOOKS_FILE")
+    hooks=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks // empty" "$HOOKS_FILE")
     if [ -z "$hooks" ] || [ "$hooks" = "null" ]; then
       echo "❌ $event[$i]: Missing 'hooks' array"
-      ((error_count++))
+      error_count=$((error_count + 1))
       continue
     fi
 
     # Validate each hook in the array
-    hook_array_count=$(jq -r ".\"$event\"[$i].hooks | length" "$HOOKS_FILE")
+    hook_array_count=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks | length" "$HOOKS_FILE")
 
     for ((j=0; j<hook_array_count; j++)); do
-      hook_type=$(jq -r ".\"$event\"[$i].hooks[$j].type // empty" "$HOOKS_FILE")
+      hook_type=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks[$j].type // empty" "$HOOKS_FILE")
 
       if [ -z "$hook_type" ]; then
         echo "❌ $event[$i].hooks[$j]: Missing 'type' field"
-        ((error_count++))
+        error_count=$((error_count + 1))
         continue
       fi
 
       if [ "$hook_type" != "command" ] && [ "$hook_type" != "prompt" ]; then
         echo "❌ $event[$i].hooks[$j]: Invalid type '$hook_type' (must be 'command' or 'prompt')"
-        ((error_count++))
+        error_count=$((error_count + 1))
         continue
       fi
 
       # Check type-specific fields
       if [ "$hook_type" = "command" ]; then
-        command=$(jq -r ".\"$event\"[$i].hooks[$j].command // empty" "$HOOKS_FILE")
+        command=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks[$j].command // empty" "$HOOKS_FILE")
         if [ -z "$command" ]; then
           echo "❌ $event[$i].hooks[$j]: Command hooks must have 'command' field"
-          ((error_count++))
+          error_count=$((error_count + 1))
         else
           # Check for hardcoded paths
           if [[ "$command" == /* ]] && [[ "$command" != *'${CLAUDE_PLUGIN_ROOT}'* ]]; then
             echo "⚠️  $event[$i].hooks[$j]: Hardcoded absolute path detected. Consider using \${CLAUDE_PLUGIN_ROOT}"
-            ((warning_count++))
+            warning_count=$((warning_count + 1))
           fi
         fi
       elif [ "$hook_type" = "prompt" ]; then
-        prompt=$(jq -r ".\"$event\"[$i].hooks[$j].prompt // empty" "$HOOKS_FILE")
+        prompt=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks[$j].prompt // empty" "$HOOKS_FILE")
         if [ -z "$prompt" ]; then
           echo "❌ $event[$i].hooks[$j]: Prompt hooks must have 'prompt' field"
-          ((error_count++))
+          error_count=$((error_count + 1))
         fi
 
         # Check if prompt-based hooks are used on supported events
         if [ "$event" != "Stop" ] && [ "$event" != "SubagentStop" ] && [ "$event" != "UserPromptSubmit" ] && [ "$event" != "PreToolUse" ]; then
           echo "⚠️  $event[$i].hooks[$j]: Prompt hooks may not be fully supported on $event (best on Stop, SubagentStop, UserPromptSubmit, PreToolUse)"
-          ((warning_count++))
+          warning_count=$((warning_count + 1))
         fi
       fi
 
       # Check timeout
-      timeout=$(jq -r ".\"$event\"[$i].hooks[$j].timeout // empty" "$HOOKS_FILE")
+      timeout=$(jq -r "($HOOKS_SELECTOR) | .\"$event\"[$i].hooks[$j].timeout // empty" "$HOOKS_FILE")
       if [ -n "$timeout" ] && [ "$timeout" != "null" ]; then
         if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
           echo "❌ $event[$i].hooks[$j]: Timeout must be a number"
-          ((error_count++))
+          error_count=$((error_count + 1))
         elif [ "$timeout" -gt 600 ]; then
           echo "⚠️  $event[$i].hooks[$j]: Timeout $timeout seconds is very high (max 600s)"
-          ((warning_count++))
+          warning_count=$((warning_count + 1))
         elif [ "$timeout" -lt 5 ]; then
           echo "⚠️  $event[$i].hooks[$j]: Timeout $timeout seconds is very low"
-          ((warning_count++))
+          warning_count=$((warning_count + 1))
         fi
       fi
     done

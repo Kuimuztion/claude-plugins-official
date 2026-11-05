@@ -128,6 +128,15 @@ function validateSkill(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
+  if (
+    frontmatter["name"] !== undefined &&
+    (typeof frontmatter["name"] !== "string" || !frontmatter["name"].trim())
+  ) {
+    issues.push({
+      level: "error",
+      message: '"name" field must be a non-empty string when present',
+    });
+  }
   if (!frontmatter["description"] && !frontmatter["when_to_use"]) {
     issues.push({
       level: "error",

@@ -160,11 +160,13 @@ def extract_frontmatter(content: str) -> tuple[Dict[str, Any], str]:
 
             item_text = stripped[1:].strip()
 
-            # Check if this is an inline dict (key: value on same line)
-            if ':' in item_text and ',' in item_text:
+            # Check if this is an inline dict (key: value, key2: value2 on same line)
+            if ':' in item_text and re.search(r',\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:', item_text):
                 # Inline comma-separated dict: "- field: command, operator: regex_match"
+                # Split only on commas followed by a valid key name and colon so regex
+                # quantifiers like {1,3} inside pattern values are preserved intact.
                 item_dict = {}
-                for part in item_text.split(','):
+                for part in re.split(r',\s*(?=[a-zA-Z_][a-zA-Z0-9_]*\s*:)', item_text):
                     if ':' in part:
                         k, v = part.split(':', 1)
                         item_dict[k.strip()] = v.strip().strip('"').strip("'")
